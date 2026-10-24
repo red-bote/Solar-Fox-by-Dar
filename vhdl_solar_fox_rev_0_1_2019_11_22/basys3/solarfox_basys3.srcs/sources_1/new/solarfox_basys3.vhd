@@ -1,220 +1,304 @@
-----------------------------------------------------------------------------------
--- Company: Red~Bote
--- Engineer: Glenn Neidermeier
--- 
--- Create Date: 11/30/2024 05:30:04 PM
--- Design Name: 
--- Module Name: solarfox_basys3
--- Project Name: 
--- Target Devices: Basys 3 Artix-7 FPGA Trainer Board
--- Tool Versions: Vivado v2020.2 
--- Description: 
---   Solar Fox (Midway MCR) by Dar on Basys 3 Artix-7 FPGA Trainer Board 
--- Dependencies: 
---   vhdl_solar_fox_rev_0_1_2019_11_22
--- Revision:
--- Revision 0.01 - File Created
--- Additional Comments:
--- 
-----------------------------------------------------------------------------------
+---------------------------------------------------------------------------------
+-- Basys 3 top level for Solar Fox by Red~Bote, derived from
+-- solarfox_de10_lite.vhd by Dar (darfpga@aol.fr, http://darfpga.blogspot.fr);
+-- see that file for its history.
+---------------------------------------------------------------------------------
+--
+-- release rev 01 : initial Basys 3 release
+--  (23/10/2026)
+--
+---------------------------------------------------------------------------------
+-- Educational use only
+-- Do not redistribute synthetized file with roms
+-- Do not redistribute roms whatever the form
+-- Use at your own risk
+---------------------------------------------------------------------------------
+--
+-- release rev 01 : add TV 15kHz mode
+--  (2019/11/22)    use merged sprite 8bits roms (make it easier to externalize)
+--
+-- release rev 00 : initial release
+--
+--
+-- Main features :
+--  PS2 keyboard input @onboard USB HID (PS/2 emulation)
+--  Joystick input     @JXADC pins 1/2/3/4/7 = right/left/down/up/fire (active low);
+--                     JXADC direction + fire also asserts fast
+--  Audio pwm output   @PmodAMP2 on JA pins 1/2/4 (left channel, mixed);
+--                     sw15 = audio disable, sw14 = gain
+--
+--  Video         : VGA 31Khz/60Hz and TV 15kHz
+--  Cocktail mode : NO
+--  Sound         : OK
+--
+-- Uses 1 MMCM (clk_wiz_0) for 40MHz from 100MHz
+--
+-- Board buttons :
+--   btnC : reset game
+--   btnU : Add coin 1
+--   btnD : Add coin 2
+--   btnL : fast / start (also JXADC direction + fire)
+--
+-- Board switches :
+--   sw13 : 0 = 31kHz VGA, 1 = 15kHz TV (csync on hs)
+--
+-- Keyboard players inputs (MAME defaults) :
+--
+--   5 : Add coin 1
+--   6 : Add coin 2
+--   F2 : toggle service mode ON/OFF
+--   LEFT CTRL   : fire
+--   LEFT ALT    : fast / start
+--   RIGHT arrow : move right
+--   LEFT  arrow : move left
+--   UP    arrow : move up
+--   DOWN  arrow : move down
+--
+-- Other details : see solar_fox.vhd
+---------------------------------------------------------------------------------
 
 library ieee;
 use ieee.std_logic_1164.all;
 use ieee.std_logic_unsigned.all;
 use ieee.numeric_std.all;
 
+library work;
+
 entity solarfox_basys3 is
-    port (
-        clk : in std_logic;
+port(
+  clk            : in std_logic;
+  btnC           : in std_logic;
+  btnU           : in std_logic;
+  btnD           : in std_logic;
+  btnL           : in std_logic;
+  btnR           : in std_logic;
+  sw             : in std_logic_vector(15 downto 0);
 
-        O_PMODAMP2_AIN : out std_logic;
-        O_PMODAMP2_GAIN : out std_logic;
-        O_PMODAMP2_SHUTD : out std_logic;
+  vga_r     : out std_logic_vector(3 downto 0);
+  vga_g     : out std_logic_vector(3 downto 0);
+  vga_b     : out std_logic_vector(3 downto 0);
+  vga_hs    : out std_logic;
+  vga_vs    : out std_logic;
 
-        vga_r : out std_logic_vector (3 downto 0);
-        vga_g : out std_logic_vector (3 downto 0);
-        vga_b : out std_logic_vector (3 downto 0);
-        vga_hs : out std_logic;
-        vga_vs : out std_logic;
-
-        ps2_clk : in std_logic;
-        ps2_dat : in std_logic;
-
-        sw : in std_logic_vector (15 downto 0));
+  JXADC            : in  std_logic_vector(4 downto 0);
+  ps2_clk          : in  std_logic;
+  ps2_dat          : in  std_logic;
+  O_PMODAMP2_AIN   : out std_logic;
+  O_PMODAMP2_GAIN  : out std_logic;
+  O_PMODAMP2_SHUTD : out std_logic
+);
 end solarfox_basys3;
 
 architecture struct of solarfox_basys3 is
 
-    signal clock_40 : std_logic;
-    signal clock_kbd : std_logic;
-    signal reset : std_logic;
+  signal clock_40  : std_logic;
+  signal reset     : std_logic;
+  signal mmcm_locked : std_logic;
 
-    signal clock_div : std_logic_vector(3 downto 0);
+  signal clock_div : std_logic_vector(3 downto 0);
 
-    signal r : std_logic_vector(3 downto 0);
-    signal g : std_logic_vector(3 downto 0);
-    signal b : std_logic_vector(3 downto 0);
-    signal hsync : std_logic;
-    signal vsync : std_logic;
-    signal csync : std_logic;
-    signal blankn : std_logic;
-    signal tv15Khz_mode : std_logic;
+  signal r         : std_logic_vector(3 downto 0);
+  signal g         : std_logic_vector(3 downto 0);
+  signal b         : std_logic_vector(3 downto 0);
+  signal hsync     : std_logic;
+  signal vsync     : std_logic;
+  signal csync     : std_logic;
+  signal blankn    : std_logic;
+  signal tv15Khz_mode : std_logic;
 
-    signal audio_l : std_logic_vector(15 downto 0);
-    signal audio_r : std_logic_vector(15 downto 0);
-    signal pwm_accumulator_l : std_logic_vector(17 downto 0);
-    signal pwm_accumulator_r : std_logic_vector(17 downto 0);
+  signal audio_l           : std_logic_vector(15 downto 0);
+  signal audio_r           : std_logic_vector(15 downto 0);
+  signal pwm_accumulator_l : std_logic_vector(17 downto 0);
 
-    signal kbd_intr : std_logic;
-    signal kbd_scancode : std_logic_vector(7 downto 0);
-    signal joy_BBBBFRLDU : std_logic_vector(8 downto 0);
-    signal fn_pulse : std_logic_vector(7 downto 0);
-    signal fn_toggle : std_logic_vector(7 downto 0);
+  -- 2-FF synchronizers for the asynchronous inputs
+  signal ps2_clk_meta, ps2_clk_s : std_logic := '1';
+  signal ps2_dat_meta, ps2_dat_s : std_logic := '1';
+  signal jxadc_meta, jxadc_s     : std_logic_vector(4 downto 0) := (others => '1');
+  signal btn_meta, btn_s         : std_logic_vector(3 downto 0) := (others => '0'); -- U, D, L, R
+  attribute ASYNC_REG : string;
+  attribute ASYNC_REG of ps2_clk_meta, ps2_clk_s, ps2_dat_meta, ps2_dat_s : signal is "TRUE";
+  attribute ASYNC_REG of jxadc_meta, jxadc_s, btn_meta, btn_s : signal is "TRUE";
 
-    signal dbg_cpu_addr : std_logic_vector(15 downto 0);
-
-    component clk_wiz_0
-        port (
-            clk_out1 : out std_logic;
-            locked : out std_logic;
-            clk_in1 : in std_logic
-        );
-    end component;
+  signal kbd_intr       : std_logic;
+  signal kbd_scancode   : std_logic_vector(7 downto 0);
+  signal kbd_rel        : std_logic := '0';
+  -- kbd_key : 0 up, 1 down, 2 left, 3 right, 4 left ctrl, 5 left alt,
+  --           6 '1', 7 '2', 8 '5', 9 '6', 10 F2
+  signal kbd_key        : std_logic_vector(10 downto 0) := (others => '0');
+  signal kbd_f2_r       : std_logic := '0';
+  signal service        : std_logic := '0'; -- toggled by F2
+  signal joy_BBBBFRLDU  : std_logic_vector(8 downto 0);
+  signal coin1_in       : std_logic;
+  signal coin2_in       : std_logic;
+  signal fast1_in       : std_logic;
 
 begin
 
-    reset <= '0'; -- not reset_n;
+  -- btnC resets the MMCM; the core is held in reset until the MMCM locks
+  reset <= btnC or not mmcm_locked;
 
-    tv15Khz_mode <= '0'; -- not fn_toggle(7); -- F8
+  tv15Khz_mode <= sw(13);
 
-    -- Clock 40MHz for Video and CPU board
-    clocks : clk_wiz_0
-    port map(
-        -- Clock out ports  
-        clk_out1 => clock_40,
-        -- Status and control signals
-        locked => open, -- pll_locked,
-        -- Clock in ports
-        clk_in1 => clk
-    );
+  -- Clock 40MHz for kick core and sound_board
+  clocks : entity work.clk_wiz_0
+  port map(
+    clk_in1  => clk,
+    clk_out1 => clock_40,
+    reset    => btnC,
+    locked   => mmcm_locked
+  );
 
-    -- Solar Fox
-    solarfox : entity work.solarfox
-        port map(
-            clock_40 => clock_40,
-            reset => reset,
+  -- synchronize asynchronous inputs to the core clock
+  process(clock_40)
+  begin
+    if rising_edge(clock_40) then
+      ps2_clk_meta <= ps2_clk;      ps2_clk_s <= ps2_clk_meta;
+      ps2_dat_meta <= ps2_dat;      ps2_dat_s <= ps2_dat_meta;
+      jxadc_meta   <= JXADC;        jxadc_s   <= jxadc_meta;
+      btn_meta     <= btnU & btnD & btnL & btnR;
+      btn_s        <= btn_meta;
+    end if;
+  end process;
 
-            tv15Khz_mode => tv15Khz_mode,
-            video_r => r,
-            video_g => g,
-            video_b => b,
-            video_csync => csync,
-            video_blankn => blankn,
-            video_hs => hsync,
-            video_vs => vsync,
+  -- Solar Fox
+  solarfox : entity work.solarfox
+  port map(
+    clock_40   => clock_40,
+    reset      => reset,
 
-            separate_audio => fn_toggle(4), -- F5
-            audio_out_l => audio_l,
-            audio_out_r => audio_r,
+    tv15Khz_mode => tv15Khz_mode,
+    video_r      => r,
+    video_g      => g,
+    video_b      => b,
+    video_csync  => csync,
+    video_blankn => blankn,
+    video_hs     => hsync,
+    video_vs     => vsync,
 
-            coin1 => fn_pulse(0), -- F1
-            coin2 => '0',
-            fast1 => fn_pulse(1), -- F2
-            fast2 => '0',
+    separate_audio => '0', -- mixed : mono amp on the left channel
+    audio_out_l    => audio_l,
+    audio_out_r    => audio_r,
 
-            fire1 => joy_BBBBFRLDU(4), -- espace
-            fire2 => '0',
+    coin1          => coin1_in,
+    coin2          => coin2_in,
+    fast1          => fast1_in,
+    fast2          => '0',
 
-            up1 => joy_BBBBFRLDU(0), -- up
-            down1 => joy_BBBBFRLDU(1), -- down
-            left1 => joy_BBBBFRLDU(2), -- left
-            right1 => joy_BBBBFRLDU(3), -- right
+    fire1          => joy_BBBBFRLDU(4), -- left ctrl : fire
+    fire2          => '0',
 
-            up2 => '0',
-            down2 => '0',
-            left2 => '0',
-            right2 => '0',
+    up1            => joy_BBBBFRLDU(0), -- up
+    down1          => joy_BBBBFRLDU(1), -- down
+    left1          => joy_BBBBFRLDU(2), -- left
+    right1         => joy_BBBBFRLDU(3), -- right
 
-            service => fn_toggle(6), -- F7 -- (allow machine settings access)
+    up2            => '0',
+    down2          => '0',
+    left2          => '0',
+    right2         => '0',
 
-            dbg_cpu_addr => dbg_cpu_addr
-        );
+    service        => service, -- F2 (allow machine settings access)
 
-    -- adapt video to 4bits/color only and blank
-    vga_r <= r when blankn = '1' else "0000";
-    vga_g <= g when blankn = '1' else "0000";
-    vga_b <= b when blankn = '1' else "0000";
+    dbg_cpu_addr => open
+  );
 
-    -- synchro composite/ synchro horizontale
-    -- vga_hs <= csync;
-    -- vga_hs <= hsync;
-    vga_hs <= csync when tv15Khz_mode = '1' else hsync;
-    -- commutation rapide / synchro verticale
-    -- vga_vs <= '1';
-    -- vga_vs <= vsync;
-    vga_vs <= '1' when tv15Khz_mode = '1' else vsync;
+  -- adapt video to 4bits/color only and blank
+  vga_r <= r when blankn = '1' else "0000";
+  vga_g <= g when blankn = '1' else "0000";
+  vga_b <= b when blankn = '1' else "0000";
 
-    --sound_string <= "00" & audio & "000" & "00" & audio & "000";
+  -- synchro composite/ synchro horizontale
+  -- vga_hs <= csync;
+  -- vga_hs <= hsync;
+  vga_hs <= csync when tv15Khz_mode = '1' else hsync;
+  -- commutation rapide / synchro verticale
+  -- vga_vs <= '1';
+  -- vga_vs <= vsync;
+  vga_vs <= '1'   when tv15Khz_mode = '1' else vsync;
 
-    -- get scancode from keyboard
-    process (reset, clock_40)
-    begin
-        if reset = '1' then
-            clock_div <= (others => '0');
-            clock_kbd <= '0';
+  -- clock divider for the pwm sound output
+  process (reset, clock_40)
+  begin
+    if reset='1' then
+      clock_div <= (others => '0');
+    else
+      if rising_edge(clock_40) then
+        if clock_div = "1001" then
+          clock_div <= (others => '0');
         else
-            if rising_edge(clock_40) then
-                if clock_div = "1001" then
-                    clock_div <= (others => '0');
-                    clock_kbd <= not clock_kbd;
-                else
-                    clock_div <= clock_div + '1';
-                end if;
-            end if;
+          clock_div <= clock_div + '1';
         end if;
-    end process;
+      end if;
+    end if;
+  end process;
 
-    keyboard : entity work.io_ps2_keyboard
-        port map(
-            clk => clock_kbd, -- synchrounous clock with core
-            kbd_clk => ps2_clk,
-            kbd_dat => ps2_dat,
-            interrupt => kbd_intr,
-            scancode => kbd_scancode
-        );
+  -- get scancode from keyboard
+  keyboard : entity work.io_ps2_keyboard
+  port map (
+    clk       => clock_40, -- synchrounous clock with core
+    kbd_clk   => ps2_clk_s,
+    kbd_dat   => ps2_dat_s,
+    interrupt => kbd_intr,
+    scancode  => kbd_scancode
+  );
 
-    -- translate scancode to joystick
-    joystick : entity work.kbd_joystick
-        port map(
-            clk => clock_kbd, -- synchrounous clock with core
-            kbdint => kbd_intr,
-            kbdscancode => std_logic_vector(kbd_scancode),
-            joy_BBBBFRLDU => joy_BBBBFRLDU,
-            fn_pulse => fn_pulse,
-            fn_toggle => fn_toggle
-        );
-
-    -- pwm sound output
-    process (clock_40) -- use same clock as kick_sound_board
-    begin
-        if rising_edge(clock_40) then
-
-            if clock_div = "0000" then
-                pwm_accumulator_l <= ('0' & pwm_accumulator_l(16 downto 0)) + ('0' & audio_l & '0');
-                pwm_accumulator_r <= ('0' & pwm_accumulator_r(16 downto 0)) + ('0' & audio_r & '0');
-            end if;
-
+  -- translate scancode to keys (MAME default keys, PS/2 set 2 codes)
+  -- F0 marks a release; E0 is ignored, as in kbd_joystick (keypad 8/2/4/6
+  -- also act as arrows, Right Ctrl/Alt as Left Ctrl/Alt).
+  process(clock_40)
+  begin
+    if rising_edge(clock_40) then
+      if kbd_intr = '1' then
+        if kbd_scancode = x"F0" then
+          kbd_rel <= '1';
+        elsif kbd_scancode /= x"E0" then
+          kbd_rel <= '0';
+          if kbd_scancode = x"75" then kbd_key(0)  <= not kbd_rel; end if; -- up arrow
+          if kbd_scancode = x"72" then kbd_key(1)  <= not kbd_rel; end if; -- down arrow
+          if kbd_scancode = x"6B" then kbd_key(2)  <= not kbd_rel; end if; -- left arrow
+          if kbd_scancode = x"74" then kbd_key(3)  <= not kbd_rel; end if; -- right arrow
+          if kbd_scancode = x"14" then kbd_key(4)  <= not kbd_rel; end if; -- left ctrl
+          if kbd_scancode = x"11" then kbd_key(5)  <= not kbd_rel; end if; -- left alt
+          if kbd_scancode = x"16" then kbd_key(6)  <= not kbd_rel; end if; -- 1
+          if kbd_scancode = x"1E" then kbd_key(7)  <= not kbd_rel; end if; -- 2
+          if kbd_scancode = x"2E" then kbd_key(8)  <= not kbd_rel; end if; -- 5
+          if kbd_scancode = x"36" then kbd_key(9)  <= not kbd_rel; end if; -- 6
+          if kbd_scancode = x"06" then kbd_key(10) <= not kbd_rel; end if; -- F2
         end if;
-    end process;
+      end if;
+      -- F2 toggles service mode on press (typematic repeat ignored)
+      kbd_f2_r <= kbd_key(10);
+      if kbd_f2_r = '0' and kbd_key(10) = '1' then
+        service <= not service;
+      end if;
+    end if;
+  end process;
 
-    --pwm_audio_out_l <= pwm_accumulator(17);
-    --pwm_audio_out_r <= pwm_accumulator(17);
+  -- merge keyboard, buttons and JXADC joystick (active low)
+  coin1_in  <= kbd_key(8) or btn_s(3); -- 5 or btnU
+  coin2_in  <= kbd_key(9) or btn_s(2); -- 6 or btnD
+  fast1_in  <= kbd_key(5) or btn_s(1) or (not jxadc_s(4) and not (jxadc_s(3) and jxadc_s(2) and jxadc_s(1) and jxadc_s(0))); -- left alt, btnL or JXADC direction + fire : fast / start
+  joy_BBBBFRLDU(0) <= kbd_key(0) or not jxadc_s(3); -- up    (JXADC4)
+  joy_BBBBFRLDU(1) <= kbd_key(1) or not jxadc_s(2); -- down  (JXADC3)
+  joy_BBBBFRLDU(2) <= kbd_key(2) or not jxadc_s(1); -- left  (JXADC2)
+  joy_BBBBFRLDU(3) <= kbd_key(3) or not jxadc_s(0); -- right (JXADC1)
+  joy_BBBBFRLDU(4) <= kbd_key(4) or not jxadc_s(4); -- fire : left ctrl (JXADC7)
+  joy_BBBBFRLDU(8 downto 5) <= "0000";
 
-    -- active-low shutdown pin
-    O_PMODAMP2_SHUTD <= sw(14);
-    -- gain pin is driven high there is a 6 dB gain, low is a 12 dB gain 
-    O_PMODAMP2_GAIN <= sw(15);
+  -- pwm sound output
+  process(clock_40)  -- use same clock as kick_sound_board
+  begin
+    if rising_edge(clock_40) then
 
-    O_PMODAMP2_AIN <= pwm_accumulator_l(17);
+      if clock_div = "0000" then
+        pwm_accumulator_l  <=  ('0'&pwm_accumulator_l(16 downto 0)) + ('0'&audio_l&'0');
+      end if;
+
+    end if;
+  end process;
+
+  O_PMODAMP2_AIN   <= pwm_accumulator_l(17);
+  O_PMODAMP2_SHUTD <= not sw(15); -- sw15 up = amp shut down (audio disabled)
+  O_PMODAMP2_GAIN  <= not sw(14); -- sw14 up = gain active (GAIN active low)
 
 end struct;
