@@ -1,6 +1,6 @@
 --- a/vhdl_solar_fox_rev_0_1_2019_11_22/rtl_dar/solarfox_de10_lite.vhd
 +++ b/vhdl_solar_fox_rev_0_1_2019_11_22/basys3/solarfox_basys3.srcs/sources_1/new/solarfox_basys3.vhd
-@@ -1,17 +1,18 @@
+@@ -1,55 +1,54 @@
  ---------------------------------------------------------------------------------
 --- DE10_lite Top level for Solar Fox (Midway MCR) by Dar (darfpga@aol.fr) (19/10/2019)
 --- http://darfpga.blogspot.fr
@@ -23,11 +23,12 @@
 --- Don't forget to set device configuration mode with memory initialization
 ---  (Assignments/Device/Pin options/Configuration mode)
 ----------------------------------------------------------------------------------
- --
- -- release rev 01 : add TV 15kHz mode
- --  (2019/11/22)    use merged sprite 8bits roms (make it easier to externalize)
-@@ -20,36 +21,40 @@
- --
+---
+--- release rev 01 : add TV 15kHz mode
+---  (2019/11/22)    use merged sprite 8bits roms (make it easier to externalize)
+---
+--- release rev 00 : initial release
+---
  --
  -- Main features :
 ---  PS2 keyboard input @gpio pins 35/34 (beware voltage translation/protection)
@@ -43,13 +44,13 @@
  --  Sound         : OK
  --
 --- For hardware schematic see my other project : NES
-+-- Uses 1 MMCM (clk_wiz_0) for 40MHz from 100MHz
- --
+---
 --- Uses 1 pll 40MHz from 50MHz to make 20MHz and 8Mhz
 ---
 --- Board key :
 ---   0 : reset game
----
++-- Uses 1 MMCM (clk_wiz_0) for 40MHz from 100MHz
+ --
 --- Keyboard players inputs :
 ---
 ---   F1 : Add coin
@@ -85,7 +86,7 @@
  ---------------------------------------------------------------------------------
  
  library ieee;
-@@ -58,35 +63,16 @@
+@@ -58,35 +57,16 @@
  use ieee.numeric_std.all;
  
  library work;
@@ -129,7 +130,7 @@
  
    vga_r     : out std_logic_vector(3 downto 0);
    vga_g     : out std_logic_vector(3 downto 0);
-@@ -94,29 +80,23 @@
+@@ -94,29 +74,23 @@
    vga_hs    : out std_logic;
    vga_vs    : out std_logic;
  
@@ -168,7 +169,7 @@
    signal r         : std_logic_vector(3 downto 0);
    signal g         : std_logic_vector(3 downto 0);
    signal b         : std_logic_vector(3 downto 0);
-@@ -129,48 +109,57 @@
+@@ -129,48 +103,57 @@
    signal audio_l           : std_logic_vector(15 downto 0);
    signal audio_r           : std_logic_vector(15 downto 0);
    signal pwm_accumulator_l : std_logic_vector(17 downto 0);
@@ -213,11 +214,11 @@
  begin
  
 -  reset <= not reset_n;
+-
+-  tv15Khz_mode <= not fn_toggle(7); -- F8
 +  -- btnC resets the MMCM; the core is held in reset until the MMCM locks
 +  reset <= btnC or not mmcm_locked;
  
--  tv15Khz_mode <= not fn_toggle(7); -- F8
--
 -  --arduino_io not used pins
 -  --arduino_io(7) <= '1'; -- to usb host shield max3421e RESET
 -  --arduino_io(8) <= 'Z'; -- from usb host shield max3421e GPX
@@ -254,7 +255,7 @@
    -- Solar Fox
    solarfox : entity work.solarfox
    port map(
-@@ -186,16 +175,16 @@
+@@ -186,16 +169,16 @@
      video_hs     => hsync,
      video_vs     => vsync,
  
@@ -276,7 +277,7 @@
      fire2          => '0',
  
      up1            => joy_BBBBFRLDU(0), -- up
-@@ -208,9 +197,9 @@
+@@ -208,9 +191,9 @@
      left2          => '0',
      right2         => '0',
  
@@ -288,7 +289,7 @@
    );
  
    -- adapt video to 4bits/color only and blank
-@@ -227,19 +216,15 @@
+@@ -227,19 +210,15 @@
    -- vga_vs <= vsync;
    vga_vs <= '1'   when tv15Khz_mode = '1' else vsync;
  
@@ -309,7 +310,7 @@
          else
            clock_div <= clock_div + '1';
          end if;
-@@ -247,125 +232,58 @@
+@@ -247,125 +226,58 @@
      end if;
    end process;
  
@@ -480,7 +481,7 @@
  
    -- pwm sound output
    process(clock_40)  -- use same clock as kick_sound_board
-@@ -374,14 +292,13 @@
+@@ -374,14 +286,13 @@
  
        if clock_div = "0000" then
          pwm_accumulator_l  <=  ('0'&pwm_accumulator_l(16 downto 0)) + ('0'&audio_l&'0');
